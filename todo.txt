@@ -1,15 +1,4 @@
-O mně: "rozšířil sovje portofolio" – překlep ve slově "svoje" a "portfolio"
-Přidat IČO (Macovo), Adresu, telefon a další údaje do footeru 
-Přidat telefon ke kontaktům
-Přidat F&Q sekci, ktera bude mit sekci v admin page 
-Upravit sekci služby aby odpovídala ceníku
-Přidat sekci Grafika ke stažení (do projekty)
-	siroke karty pres cely main - pomer stran cca 2:5
-	nalevo obrazek pres celou kartu ktery jde do ztracena
-	uprostred zarovnane nalevo nazev, pod tim stitek s formatem pod tim a kratky popisek
-	vpravo tlacitko stahnout
-
 Mafoš:
 * Spravit carousely aby peek fotky byl vporadku
-Odstranit z uvodni casti casti "DSLR skener svitkových a 35mm filmů." a "Co je Mafoš"
-Vyměnit úvodní fotku za obrázek front produktu
+
+Spravit landing obrázek

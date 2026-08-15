@@ -1,9 +1,15 @@
 /**
- * Authentication utilities for the admin panel.
- * Uses Web Crypto API for password hashing (SHA-256 with random salt).
+ * Přihlašování do admin panelu.
+ *
+ * Hesla ověřuje CDN Worker, ne prohlížeč. Dřív si klient stahoval veřejný
+ * users.json s hashi všech účtů a porovnával je u sebe — hashe si tak mohl
+ * stáhnout kdokoliv a lámat je offline. Teď jde jméno s heslem na
+ * POST /api/login a zpátky se vrací session token s omezenou platností.
  */
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+import { CDN_URL } from './cdn'
+
+// ─── Typy ────────────────────────────────────────────────────────────────────
 
 export type Permission = 'upload' | 'delete' | 'edit'
 export type Section = 'gallery' | 'museum' | 'rosnik'
@@ -14,27 +20,20 @@ export interface UserPermissions {
   rosnik: Permission[]
 }
 
+/** Uživatel tak, jak ho vydává server — bez hashe a soli. */
 export interface User {
   username: string
-  passwordHash: string   // hex(SHA-256(salt + password))
-  salt: string           // random hex string
   role: 'admin' | 'editor'
   permissions: UserPermissions
 }
 
-export interface UsersManifest {
-  users: User[]
-  updatedAt?: number
-}
+// ─── Konstanty ───────────────────────────────────────────────────────────────
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-
-const SESSION_USER_KEY = '__fr_admin_user'       // sessionStorage: logged-in username
-const SESSION_AUTH_KEY = '__fr_admin_auth'        // sessionStorage: CDN auth token
-const SESSION_ROLE_KEY = '__fr_admin_role'        // sessionStorage: user role
-const SESSION_PERMS_KEY = '__fr_admin_perms'      // sessionStorage: JSON permissions
-const CDN_TOKEN_KEY = '__fr_admin_pass'           // localStorage: CDN API token
-const RATE_LIMIT_KEY = '__fr_login_attempts'      // sessionStorage: login rate limiting
+const SESSION_USER_KEY = '__fr_admin_user'
+const SESSION_AUTH_KEY = '__fr_admin_auth'    // session token z /api/login
+const SESSION_ROLE_KEY = '__fr_admin_role'
+const SESSION_PERMS_KEY = '__fr_admin_perms'
+const SESSION_EXP_KEY = '__fr_admin_exp'
 
 const ALL_PERMISSIONS: Permission[] = ['upload', 'delete', 'edit']
 
@@ -44,71 +43,41 @@ export const FULL_PERMISSIONS: UserPermissions = {
   rosnik: [...ALL_PERMISSIONS],
 }
 
-// ─── Crypto ──────────────────────────────────────────────────────────────────
+// ─── Volání API ──────────────────────────────────────────────────────────────
 
-/** Generate a random hex salt (32 bytes = 64 hex chars). */
-export function generateSalt(): string {
-  const bytes = new Uint8Array(32)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('')
-}
-
-/** Hash a password with salt using SHA-256. Returns hex string. */
-export async function hashPassword(password: string, salt: string): Promise<string> {
-  const data = new TextEncoder().encode(salt + password)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('')
-}
-
-// ─── Rate Limiting ───────────────────────────────────────────────────────────
-
-interface RateLimitState {
-  attempts: number
-  lockedUntil: number  // timestamp
-}
-
-function getRateLimitState(): RateLimitState {
-  try {
-    const raw = sessionStorage.getItem(RATE_LIMIT_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch { /* ignore */ }
-  return { attempts: 0, lockedUntil: 0 }
-}
-
-function setRateLimitState(state: RateLimitState): void {
-  sessionStorage.setItem(RATE_LIMIT_KEY, JSON.stringify(state))
-}
-
-/** Check if login is rate-limited. Returns seconds remaining or 0. */
-export function checkRateLimit(): number {
-  const state = getRateLimitState()
-  if (state.lockedUntil > Date.now()) {
-    return Math.ceil((state.lockedUntil - Date.now()) / 1000)
+function authHeaders(): HeadersInit {
+  const token = sessionStorage.getItem(SESSION_AUTH_KEY) || ''
+  return {
+    'Authorization': `Bearer ${token}`,
+    'X-Api-Key': token,
+    'Content-Type': 'application/json',
   }
-  return 0
 }
 
-/** Record a failed login attempt. Locks after 5 failures for increasing durations. */
-export function recordFailedAttempt(): number {
-  const state = getRateLimitState()
-  state.attempts++
-  if (state.attempts >= 5) {
-    // Lock for 30s * (attempts - 4), max 5 minutes
-    const lockDuration = Math.min(30000 * (state.attempts - 4), 300000)
-    state.lockedUntil = Date.now() + lockDuration
-    setRateLimitState(state)
-    return Math.ceil(lockDuration / 1000)
+/** Pošle POST na endpoint API a vrátí rozparsovanou odpověď. */
+async function apiPost<T>(
+  endpoint: string,
+  body?: unknown,
+  withAuth = true,
+): Promise<T> {
+  const res = await fetch(`${CDN_URL}api/${endpoint}`, {
+    method: 'POST',
+    headers: withAuth ? authHeaders() : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+
+  let data: unknown = null
+  try { data = await res.json() } catch { /* prázdná nebo nevalidní odpověď */ }
+
+  if (!res.ok) {
+    const message = (data as { error?: string })?.error
+    throw new Error(message || `Request failed (${res.status})`)
   }
-  setRateLimitState(state)
-  return 0
+
+  return data as T
 }
 
-/** Reset rate limit state after successful login. */
-export function resetRateLimit(): void {
-  sessionStorage.removeItem(RATE_LIMIT_KEY)
-}
-
-// ─── Session Management ──────────────────────────────────────────────────────
+// ─── Session ─────────────────────────────────────────────────────────────────
 
 export interface SessionInfo {
   username: string
@@ -116,41 +85,107 @@ export interface SessionInfo {
   permissions: UserPermissions
 }
 
-/** Store session info after successful login. */
-export function setSession(user: User, token?: string): void {
-  const cdnToken = token || localStorage.getItem(CDN_TOKEN_KEY) || ''
-  sessionStorage.setItem(SESSION_AUTH_KEY, cdnToken)
-  sessionStorage.setItem(SESSION_USER_KEY, user.username)
-  sessionStorage.setItem(SESSION_ROLE_KEY, user.role)
-  sessionStorage.setItem(SESSION_PERMS_KEY, JSON.stringify(user.permissions))
-}
-
-/** Get current session info, or null if not logged in. */
+/** Vrátí přihlášeného uživatele, nebo null. Vypršelou session sama uklidí. */
 export function getSession(): SessionInfo | null {
+  if (typeof window === 'undefined') return null
+
+  const token = sessionStorage.getItem(SESSION_AUTH_KEY)
   const username = sessionStorage.getItem(SESSION_USER_KEY)
   const role = sessionStorage.getItem(SESSION_ROLE_KEY) as 'admin' | 'editor' | null
-  const permsJson = sessionStorage.getItem(SESSION_PERMS_KEY)
-  const authToken = sessionStorage.getItem(SESSION_AUTH_KEY)
+  if (!token || !username || !role) return null
 
-  if (!username || !role || !authToken) return null
+  const expiresAt = parseInt(sessionStorage.getItem(SESSION_EXP_KEY) || '0', 10)
+  if (expiresAt && Date.now() > expiresAt) {
+    clearSession()
+    return null
+  }
 
   let permissions: UserPermissions = FULL_PERMISSIONS
-  if (permsJson) {
-    try { permissions = JSON.parse(permsJson) } catch { /* use default */ }
+  const raw = sessionStorage.getItem(SESSION_PERMS_KEY)
+  if (raw) {
+    try { permissions = JSON.parse(raw) } catch { /* ponech výchozí */ }
   }
 
   return { username, role, permissions }
 }
 
-/** Clear session (logout). */
-export function clearSession(): void {
-  sessionStorage.removeItem(SESSION_AUTH_KEY)
-  sessionStorage.removeItem(SESSION_USER_KEY)
-  sessionStorage.removeItem(SESSION_ROLE_KEY)
-  sessionStorage.removeItem(SESSION_PERMS_KEY)
+function storeSession(user: User, token: string, expiresAt: number): void {
+  sessionStorage.setItem(SESSION_AUTH_KEY, token)
+  sessionStorage.setItem(SESSION_USER_KEY, user.username)
+  sessionStorage.setItem(SESSION_ROLE_KEY, user.role)
+  sessionStorage.setItem(SESSION_PERMS_KEY, JSON.stringify(user.permissions))
+  sessionStorage.setItem(SESSION_EXP_KEY, String(expiresAt))
 }
 
-/** Check if current user has a specific permission on a section. */
+export function clearSession(): void {
+  for (const key of [
+    SESSION_AUTH_KEY, SESSION_USER_KEY, SESSION_ROLE_KEY,
+    SESSION_PERMS_KEY, SESSION_EXP_KEY,
+  ]) {
+    sessionStorage.removeItem(key)
+  }
+}
+
+// ─── Přihlášení a odhlášení ──────────────────────────────────────────────────
+
+/**
+ * Přihlásí uživatele. Při špatných údajích vyhodí chybu s hláškou ze serveru.
+ * Počítadlo neúspěšných pokusů drží Worker podle IP — na rozdíl od původního
+ * počítadla v sessionStorage ho nejde obejít anonymním oknem.
+ */
+export async function login(username: string, password: string): Promise<SessionInfo> {
+  const res = await apiPost<{ token: string; expiresAt: number; user: User }>(
+    'login',
+    { username, password },
+    false,
+  )
+  storeSession(res.user, res.token, res.expiresAt)
+  return {
+    username: res.user.username,
+    role: res.user.role,
+    permissions: res.user.permissions,
+  }
+}
+
+/** Odhlásí uživatele a zneplatní token i na serveru. */
+export async function logout(): Promise<void> {
+  try {
+    await apiPost('logout')
+  } catch {
+    // I když se odhlášení na serveru nepovede, lokální session musí zmizet
+  }
+  clearSession()
+}
+
+/** Ověří u serveru, že token pořád platí. Používá se při načtení panelu. */
+export async function verifySession(): Promise<SessionInfo | null> {
+  const local = getSession()
+  if (!local) return null
+
+  try {
+    const res = await apiPost<{ user: User }>('session')
+    storeSession(
+      res.user,
+      sessionStorage.getItem(SESSION_AUTH_KEY) || '',
+      parseInt(sessionStorage.getItem(SESSION_EXP_KEY) || '0', 10),
+    )
+    return {
+      username: res.user.username,
+      role: res.user.role,
+      permissions: res.user.permissions,
+    }
+  } catch {
+    clearSession()
+    return null
+  }
+}
+
+// ─── Oprávnění ───────────────────────────────────────────────────────────────
+
+/**
+ * Kontrola pro skrývání tlačítek v UI. Skutečné vynucení dělá Worker —
+ * tohle je jen pohodlí, ne bezpečnostní hranice.
+ */
 export function hasPermission(section: Section, permission: Permission): boolean {
   const session = getSession()
   if (!session) return false
@@ -158,73 +193,42 @@ export function hasPermission(section: Section, permission: Permission): boolean
   return session.permissions[section]?.includes(permission) ?? false
 }
 
-/** Check if current user is admin. */
 export function isAdmin(): boolean {
+  if (typeof window === 'undefined') return false
   return sessionStorage.getItem(SESSION_ROLE_KEY) === 'admin'
 }
 
-// ─── User Storage (CDN) ──────────────────────────────────────────────────────
+// ─── Změna vlastního hesla ───────────────────────────────────────────────────
 
-/** Fetch users manifest from CDN. Returns empty manifest if not found. */
-export async function loadUsers(): Promise<UsersManifest> {
-  // Dynamic import to avoid circular dependency
-  const { CDN_URL } = await import('./cdn')
-  try {
-    const res = await fetch(`${CDN_URL}users.json`, { cache: 'no-store' })
-    if (!res.ok) return { users: [] }
-    const data = await res.json()
-    if (data && Array.isArray(data.users)) return data
-  } catch { /* ignore */ }
-  return { users: [] }
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string,
+): Promise<void> {
+  await apiPost('change-password', { currentPassword, newPassword })
 }
 
-/**
- * Save users manifest to CDN via the dedicated save-users endpoint.
- */
-export async function saveUsersToCdn(manifest: UsersManifest): Promise<void> {
-  const { CDN_URL } = await import('./cdn')
-  const stamped = { ...manifest, updatedAt: Date.now() }
-  const token = sessionStorage.getItem('__fr_admin_auth') || ''
+// ─── Správa uživatelů (jen pro adminy) ───────────────────────────────────────
 
-  const res = await fetch(`${CDN_URL}api/save-users`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'X-Api-Key': token,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(stamped),
-  })
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    throw new Error(`Failed to save users (${res.status}): ${text}`)
-  }
+export async function loadUsers(): Promise<{ users: User[] }> {
+  return apiPost<{ users: User[] }>('users')
 }
 
-// ─── User Management ────────────────────────────────────────────────────────
-
-/** Create default admin user from existing password. Used for migration. */
-export async function createDefaultAdmin(password: string): Promise<User> {
-  const salt = generateSalt()
-  const passwordHash = await hashPassword(password, salt)
-  return {
-    username: 'admin',
-    passwordHash,
-    salt,
-    role: 'admin',
-    permissions: FULL_PERMISSIONS,
-  }
+export interface SaveUserInput {
+  username: string
+  role: 'admin' | 'editor'
+  permissions: UserPermissions
+  /** Vyplní se jen při zakládání nebo když se heslo mění. */
+  password?: string
+  /** Původní jméno při přejmenování. */
+  originalUsername?: string
+  isNew: boolean
 }
 
-/** Verify a password against a user's stored hash. */
-export async function verifyPassword(password: string, user: User): Promise<boolean> {
-  const hash = await hashPassword(password, user.salt)
-  // Constant-time comparison to prevent timing attacks
-  if (hash.length !== user.passwordHash.length) return false
-  let result = 0
-  for (let i = 0; i < hash.length; i++) {
-    result |= hash.charCodeAt(i) ^ user.passwordHash.charCodeAt(i)
-  }
-  return result === 0
+export async function saveUser(input: SaveUserInput): Promise<User> {
+  const res = await apiPost<{ user: User }>('users/save', input)
+  return res.user
+}
+
+export async function deleteUser(username: string): Promise<void> {
+  await apiPost('users/delete', { username })
 }

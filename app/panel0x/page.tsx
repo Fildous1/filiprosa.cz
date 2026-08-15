@@ -5,12 +5,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   getSession,
-  clearSession,
-  hashPassword,
-  generateSalt,
-  verifyPassword,
-  loadUsers,
-  saveUsersToCdn,
+  logout,
+  changePassword,
   type SessionInfo,
 } from '@/lib/auth'
 
@@ -137,8 +133,8 @@ export default function AdminDashboard() {
     }
   }, [userMenuOpen])
 
-  function handleLogout() {
-    clearSession()
+  async function handleLogout() {
+    await logout()
     router.push('/')
   }
 
@@ -162,30 +158,8 @@ export default function AdminDashboard() {
     setPassError('')
 
     try {
-      const manifest = await loadUsers()
-      const user = manifest.users.find(
-        u => u.username.toLowerCase() === session?.username.toLowerCase()
-      )
-      if (!user) {
-        setPassError('User not found')
-        setPassSaving(false)
-        return
-      }
-
-      const valid = await verifyPassword(currentPass, user)
-      if (!valid) {
-        setPassError('Current password is incorrect')
-        setPassSaving(false)
-        return
-      }
-
-      // Hash new password
-      const salt = generateSalt()
-      const passwordHash = await hashPassword(newPass, salt)
-      user.passwordHash = passwordHash
-      user.salt = salt
-
-      await saveUsersToCdn(manifest)
+      // Heslo ověří i zahashuje Worker — prohlížeč ho jen předá dál.
+      await changePassword(currentPass, newPass)
 
       setPassSaved(true)
       setTimeout(() => {
@@ -195,8 +169,8 @@ export default function AdminDashboard() {
         setNewPass('')
         setConfirmPass('')
       }, 1000)
-    } catch {
-      setPassError('Failed to save. Check connection.')
+    } catch (err) {
+      setPassError(err instanceof Error ? err.message : 'Failed to save')
     }
 
     setPassSaving(false)

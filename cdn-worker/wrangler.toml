@@ -1,0 +1,30 @@
+name = "filiprosa-cdn"
+main = "src/index.ts"
+compatibility_date = "2026-08-01"
+
+# cdn.filiprosa.cz musí být v Cloudflare jako proxovaný (oranžový mrak)
+# DNS záznam v zóně filiprosa.cz. Custom domain route:
+routes = [
+  { pattern = "cdn.filiprosa.cz", custom_domain = true }
+]
+
+# R2 bucket s obsahem původního /cdn-upload/
+[[r2_buckets]]
+binding = "CDN"
+bucket_name = "filiprosa-cdn"
+
+# Rate limit kontaktního formuláře (1 zpráva / minutu / IP)
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "294e915ecc294d918c06beef19aea2a3"
+
+[vars]
+CONTACT_TO = "info@filiprosa.cz"
+CONTACT_FROM = "web@filiprosa.cz"
+
+# Tajné hodnoty se nastavují mimo tento soubor:
+#   npx wrangler secret put ADMIN_TOKEN
+#   npx wrangler secret put RESEND_API_KEY
+
+[observability]
+enabled = true

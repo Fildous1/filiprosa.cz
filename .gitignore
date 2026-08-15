@@ -24,3 +24,5 @@ screenshots/
 
 # For AI
 cdn-upload/
+# Build artefakty TypeScriptu
+tsconfig.tsbuildinfo

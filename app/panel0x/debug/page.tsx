@@ -3,6 +3,9 @@
 import Link from 'next/link'
 import { useState, useEffect } from 'react'
 
+// Záložní token Workeru. Normální přihlášení ho nepoužívá — session token
+// vydává /api/login. Tohle je cesta zpátky do panelu, když by se rozbilo
+// přihlašování nebo KV.
 const CDN_TOKEN_KEY = '__fr_admin_pass'
 
 export default function DebugAdmin() {
@@ -76,16 +79,16 @@ export default function DebugAdmin() {
     return (typeof window !== 'undefined' && sessionStorage.getItem('__fr_admin_auth')) || ''
   }
 
-  async function cmdDebug() {
-    const res = await fetch(`${cdnUrl()}api/debug`, {
+  async function cmdSession() {
+    const res = await fetch(`${cdnUrl()}api/session`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token()}`, 'X-Api-Key': token(), 'Content-Type': 'application/json' },
     })
-    return `HTTP ${res.status}\n\n${await res.text()}`
+    return `Who am I: HTTP ${res.status}\n\n${await res.text()}`
   }
 
   async function cmdManifests() {
-    const manifests = ['gallery', 'museum', 'rosnik', 'gear', 'services', 'site', 'pricelist', 'graphics', 'faq', 'users']
+    const manifests = ['gallery', 'museum', 'rosnik', 'gear', 'services', 'site', 'pricelist', 'graphics', 'faq']
     const lines: string[] = []
     for (const m of manifests) {
       try {
@@ -100,6 +103,15 @@ export default function DebugAdmin() {
         lines.push(`${m}.json: Error — ${err instanceof Error ? err.message : String(err)}`)
       }
     }
+
+    // users.json se ven vydávat nesmí — 404 je tady správný výsledek
+    const priv = await fetch(`${cdnUrl()}users.json`, { cache: 'no-store' })
+    lines.push(
+      priv.status === 404
+        ? 'users.json: správně nedostupný (404)'
+        : `users.json: POZOR — vrací ${priv.status}, měl by být 404!`,
+    )
+
     return lines.join('\n')
   }
 
@@ -112,13 +124,16 @@ export default function DebugAdmin() {
     return `Upload endpoint: HTTP ${res.status}\n\n${await res.text()}`
   }
 
-  async function cmdSaveUsersAuth() {
-    const res = await fetch(`${cdnUrl()}api/save-users`, {
+  async function cmdUsersAuth() {
+    const res = await fetch(`${cdnUrl()}api/users`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token()}`, 'X-Api-Key': token(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ _test: true }),
     })
-    return `save-users endpoint: HTTP ${res.status}\n\n${await res.text()}`
+    const text = await res.text()
+    const leak = /passwordHash|"salt"/.test(text)
+      ? '\n\nPOZOR: odpověď obsahuje hash nebo sůl!'
+      : ''
+    return `users endpoint: HTTP ${res.status}\n\n${text}${leak}`
   }
 
   async function cmdContact() {
@@ -179,7 +194,7 @@ export default function DebugAdmin() {
 
         {/* Token Setter */}
         <div className="mb-4 px-5 py-4 bg-charcoal border border-white/[0.05] rounded-[3px]">
-          <p className="text-[0.72rem] text-muted/50 uppercase tracking-wider mb-3">Update CDN Token</p>
+          <p className="text-[0.72rem] text-muted/50 uppercase tracking-wider mb-3">Break-glass token</p>
           <div className="flex gap-2">
             <input
               type="password"
@@ -196,7 +211,7 @@ export default function DebugAdmin() {
               {tokenSaved ? 'Saved ✓' : 'Save'}
             </button>
           </div>
-          <p className="text-[0.65rem] text-muted/30 mt-2">Saves to localStorage + sessionStorage. Takes effect immediately.</p>
+          <p className="text-[0.65rem] text-muted/30 mt-2">Záložní token Workeru pro případ, že se rozbije přihlašování. Běžné přihlášení ho nepotřebuje.</p>
         </div>
 
         {/* Auth Storage */}
@@ -245,11 +260,11 @@ export default function DebugAdmin() {
               Ping CDN
             </button>
             <button
-              onClick={() => run('debug', cmdDebug)}
+              onClick={() => run('session', cmdSession)}
               disabled={loading}
               className="px-3 py-1 text-[0.72rem] font-medium text-orange-400 border border-orange-500/30 rounded-[2px] hover:bg-orange-500/10 disabled:opacity-40 transition-colors duration-200"
             >
-              Debug Endpoint
+              Who Am I
             </button>
             <button
               onClick={() => run('manifests', cmdManifests)}
@@ -266,11 +281,11 @@ export default function DebugAdmin() {
               Test Upload Auth
             </button>
             <button
-              onClick={() => run('save-users', cmdSaveUsersAuth)}
+              onClick={() => run('users', cmdUsersAuth)}
               disabled={loading}
               className="px-3 py-1 text-[0.72rem] font-medium text-orange-400 border border-orange-500/30 rounded-[2px] hover:bg-orange-500/10 disabled:opacity-40 transition-colors duration-200"
             >
-              Test Save-Users Auth
+              Test Users Endpoint
             </button>
             <button
               onClick={() => run('contact', cmdContact)}

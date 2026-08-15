@@ -5,14 +5,12 @@ import { useRouter } from 'next/navigation'
 import {
   isAdmin,
   getSession,
-  generateSalt,
-  hashPassword,
   loadUsers,
-  saveUsersToCdn,
+  saveUser,
+  deleteUser,
   type User,
   type Permission,
   type Section,
-  type UserPermissions,
   FULL_PERMISSIONS,
 } from '@/lib/auth'
 import { useToast } from '@/components/admin/Toast'
@@ -39,6 +37,8 @@ export default function UsersPage() {
   const [newPassword, setNewPassword] = useState('')
   const [saving, setSaving] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  // Jméno před editací — server podle něj pozná, který účet přejmenovat
+  const [originalUsername, setOriginalUsername] = useState('')
 
   // Access control
   useEffect(() => {
@@ -50,8 +50,8 @@ export default function UsersPage() {
   // Load users
   useEffect(() => {
     loadUsers()
-      .then(manifest => {
-        setUsers(manifest.users)
+      .then(res => {
+        setUsers(res.users)
         setLoading(false)
       })
       .catch(() => {
@@ -60,53 +60,49 @@ export default function UsersPage() {
       })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** Znovu načte seznam ze serveru — ten je zdrojem pravdy, ne lokální stav. */
+  async function refresh() {
+    const res = await loadUsers()
+    setUsers(res.users)
+  }
+
   async function handleSaveUser() {
     if (!editUser) return
     if (!editUser.username.trim()) {
       toast('Username is required', 'error')
       return
     }
-
-    // Validate username uniqueness
-    const existing = users.find(
-      u => u.username.toLowerCase() === editUser.username.trim().toLowerCase() && u.username !== editUser.username
-    )
-    if (existing && isNewUser) {
-      toast('Username already exists', 'error')
+    if (isNewUser && !newPassword) {
+      toast('Password is required for a new user', 'error')
       return
     }
-
-    // Empty password is allowed — user can login with empty password field
+    if (newPassword && newPassword.length < 8) {
+      toast('Password must be at least 8 characters', 'error')
+      return
+    }
 
     setSaving(true)
 
     try {
-      let userToSave = { ...editUser, username: editUser.username.trim() }
+      // Heslo jde na server v čitelné podobě přes HTTPS a hashuje ho Worker.
+      // Prohlížeč hashe vůbec nevidí.
+      await saveUser({
+        username: editUser.username.trim(),
+        role: editUser.role,
+        permissions: editUser.permissions,
+        password: newPassword || undefined,
+        originalUsername: isNewUser ? undefined : originalUsername,
+        isNew: isNewUser,
+      })
 
-      // Hash password if provided (or always for new users)
-      if (newPassword || isNewUser) {
-        const salt = generateSalt()
-        const passwordHash = await hashPassword(newPassword, salt)
-        userToSave = { ...userToSave, passwordHash, salt }
-      }
-
-      let updatedUsers: User[]
-      if (isNewUser) {
-        updatedUsers = [...users, userToSave]
-      } else {
-        updatedUsers = users.map(u =>
-          u.username.toLowerCase() === editUser.username.toLowerCase() ? userToSave : u
-        )
-      }
-
-      await saveUsersToCdn({ users: updatedUsers })
-      setUsers(updatedUsers)
+      await refresh()
       setEditUser(null)
       setIsNewUser(false)
       setNewPassword('')
+      setOriginalUsername('')
       toast(isNewUser ? 'User created' : 'User updated')
-    } catch {
-      toast('Failed to save user', 'error')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to save user', 'error')
     }
 
     setSaving(false)
@@ -120,13 +116,12 @@ export default function UsersPage() {
 
     setSaving(true)
     try {
-      const updatedUsers = users.filter(u => u.username !== username)
-      await saveUsersToCdn({ users: updatedUsers })
-      setUsers(updatedUsers)
+      await deleteUser(username)
+      await refresh()
       setDeleteConfirm(null)
       toast('User deleted')
-    } catch {
-      toast('Failed to delete user', 'error')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Failed to delete user', 'error')
     }
     setSaving(false)
   }
@@ -134,8 +129,6 @@ export default function UsersPage() {
   function startNewUser() {
     setEditUser({
       username: '',
-      passwordHash: '',
-      salt: '',
       role: 'editor',
       permissions: {
         gallery: ['upload', 'edit'],
@@ -145,6 +138,7 @@ export default function UsersPage() {
     })
     setIsNewUser(true)
     setNewPassword('')
+    setOriginalUsername('')
   }
 
   function togglePermission(section: Section, perm: Permission) {
@@ -228,7 +222,12 @@ export default function UsersPage() {
                 </div>
                 <div className="flex items-center gap-2 ml-4">
                   <button
-                    onClick={() => { setEditUser({ ...user }); setIsNewUser(false); setNewPassword('') }}
+                    onClick={() => {
+                      setEditUser({ ...user })
+                      setIsNewUser(false)
+                      setNewPassword('')
+                      setOriginalUsername(user.username)
+                    }}
                     className="px-3 py-1.5 text-[0.72rem] text-muted border border-white/[0.07] rounded-[2px] hover:text-offwhite hover:border-white/20 transition-colors duration-200"
                   >
                     Edit

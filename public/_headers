@@ -1,0 +1,42 @@
+# Hlavičky pro filiprosa.cz na Cloudflare Workers.
+#
+# Nahrazuje to, co dřív dělal public/.htaccess na Apachi u Wedosu. Po migraci
+# se .htaccess ignoroval, takže web chvíli jel úplně bez bezpečnostních
+# hlaviček — tohle je vrací zpátky.
+#
+# Soubor leží v public/, takže ho Next.js při `output: export` zkopíruje do
+# out/ a Workers Assets ho odtud načte.
+
+/*
+  # Zakáže hádání typu obsahu — bez toho může prohlížeč spustit obrázek jako skript
+  X-Content-Type-Options: nosniff
+  # Web nesmí jít vložit do cizího rámu
+  X-Frame-Options: SAMEORIGIN
+  # Neposílat plnou URL na cizí weby
+  Referrer-Policy: strict-origin-when-cross-origin
+  # Vypnout hardware, který web nepoužívá
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()
+  # Vynutit HTTPS na rok dopředu
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  # Izolace od cizích oken. Bezpečné — nikde se neotevírá cross-origin window
+  Cross-Origin-Opener-Policy: same-origin
+
+# Obsah s hashem v názvu se nikdy nemění, může se cachovat napořád
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Vlastní fonty jsou taky neměnné
+/fonts/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Admin panel nesmí skončit ve vyhledávačích ani ve sdílené cache
+/panel0x/*
+  X-Robots-Tag: noindex, nofollow
+  Cache-Control: no-store
+
+# Content-Security-Policy je připravená, ale zatím vypnutá — musí se
+# proklikat celý web včetně adpanu, jestli něco nerozbije. 'unsafe-inline'
+# u stylů potřebuje framer-motion, u skriptů inline GA a JSON-LD.
+# Zapnout odkomentováním pod /* výše:
+#
+#  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://www.googletagmanager.com https://www.google-analytics.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.filiprosa.cz https://www.google-analytics.com https://www.googletagmanager.com https://placehold.co; font-src 'self'; connect-src 'self' https://cdn.filiprosa.cz https://www.google-analytics.com https://region1.google-analytics.com https://www.googletagmanager.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests
