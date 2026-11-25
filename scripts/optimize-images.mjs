@@ -19,7 +19,7 @@ const JOBS = [
   // Hero background — full-bleed, heavily darkened by overlays, so it can be
   // compressed aggressively without visible loss.
   {
-    src: 'public/images/dance.jpg',
+    src: 'public/images/hero.jpg',
     name: 'hero',
     widths: [640, 960, 1280, 1920, 2560],
     q: { avif: 48, webp: 70, jpg: 72 },

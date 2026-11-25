@@ -30,7 +30,7 @@ export const viewport: Viewport = {
 
 export const metadata: Metadata = {
   title: {
-    default: 'Filip Rosa – Analogová fotografie, Vyškov',
+    default: 'Filip Rosa',
     template: '%s | Filip Rosa',
   },
   description:
@@ -57,7 +57,7 @@ export const metadata: Metadata = {
     alternateLocale: 'en_US',
     url: SITE_URL,
     siteName: 'Filip Rosa',
-    title: 'Filip Rosa – Analogová fotografie, Vyškov',
+    title: 'Filip Rosa',
     description:
       'Portrétní focení, produktová fotografie, vyvolávání filmů a darkroom tisky. Fotograf z Vyškova pro celou jižní Moravu.',
     images: [
@@ -71,7 +71,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Filip Rosa – Analogová fotografie, Vyškov',
+    title: 'Filip Rosa',
     description:
       'Portrétní focení, vyvolávání filmů a darkroom tisky. Fotograf z Vyškova pro celou jižní Moravu.',
     images: [`${SITE_URL}/images/profile.jpg`],
@@ -104,7 +104,7 @@ export default function RootLayout({
         {/* Preload the LCP hero image so the browser fetches it immediately,
             matching the <picture> AVIF source in components/Hero.tsx. */}
         <link
-          rel="preload"
+          rel="preload"–
           as="image"
           type="image/avif"
           href="/images/opt/hero-1280.avif"
