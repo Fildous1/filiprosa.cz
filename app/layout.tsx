@@ -104,7 +104,7 @@ export default function RootLayout({
         {/* Preload the LCP hero image so the browser fetches it immediately,
             matching the <picture> AVIF source in components/Hero.tsx. */}
         <link
-          rel="preload"–
+          rel="preload"
           as="image"
           type="image/avif"
           href="/images/opt/hero-1280.avif"
